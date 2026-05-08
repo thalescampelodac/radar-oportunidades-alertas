@@ -14,31 +14,40 @@ import { updateRadar } from "@/scripts/update-radar";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function isAuthorized(request: NextRequest): NextResponse | null {
+  if (!CRON_SECRET) {
+    return null;
+  }
+
+  const authHeader = request.headers.get("Authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const token = authHeader.substring(7);
+  if (token !== CRON_SECRET) {
+    return NextResponse.json({ error: "Invalid token" }, { status: 403 });
+  }
+
+  return null;
+}
+
+async function runUpdate(request: NextRequest) {
+  const unauthorized = isAuthorized(request);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const result = await updateRadar();
+  return NextResponse.json(result);
+}
+
 export async function POST(request: NextRequest) {
   try {
-    // Verifica se tem secret configurado e valida
-    if (CRON_SECRET) {
-      const authHeader = request.headers.get("Authorization");
-      if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return NextResponse.json(
-          { error: "Unauthorized" },
-          { status: 401 }
-        );
-      }
-
-      const token = authHeader.substring(7);
-      if (token !== CRON_SECRET) {
-        return NextResponse.json(
-          { error: "Invalid token" },
-          { status: 403 }
-        );
-      }
-    }
-
-    // Executa atualização
-    const result = await updateRadar();
-
-    return NextResponse.json(result);
+    return await runUpdate(request);
   } catch (error) {
     console.error("Error in update-radar endpoint:", error);
 
@@ -53,12 +62,20 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * GET para verificar status
+ * GET para cron do Vercel e também para smoke test local.
  */
-export async function GET() {
-  return NextResponse.json({
-    status: "ready",
-    message: "Endpoint de atualização aguardando POST com CRON_SECRET",
-    note: "Configure a variável CRON_SECRET no .env.local para usar este endpoint",
-  });
+export async function GET(request: NextRequest) {
+  try {
+    return await runUpdate(request);
+  } catch (error) {
+    console.error("Error in update-radar cron GET:", error);
+
+    return NextResponse.json(
+      {
+        success: false,
+        message: error instanceof Error ? error.message : "Unknown error",
+      },
+      { status: 500 }
+    );
+  }
 }

@@ -1,18 +1,29 @@
-import * as fs from "fs";
+import { promises as fs } from "fs";
 import * as path from "path";
+import { get, put } from "@vercel/blob";
 import { RadarData, RadarMeta } from "./types";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const RADAR_FILE = path.join(DATA_DIR, "radar.json");
 const RADAR_META_FILE = path.join(DATA_DIR, "radar-meta.json");
+const BLOB_RADAR_PATH = "radar/radar.json";
+const BLOB_RADAR_META_PATH = "radar/radar-meta.json";
+const BLOB_ACCESS = (process.env.RADAR_BLOB_ACCESS || "private") as "private" | "public";
 
-/**
- * Garante que o diretório /data existe
- */
-function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+function useBlobStorage(): boolean {
+  if (process.env.RADAR_STORAGE_MODE === "blob") {
+    return true;
   }
+
+  if (process.env.RADAR_STORAGE_MODE === "local") {
+    return false;
+  }
+
+  return Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+}
+
+async function ensureDataDir(): Promise<void> {
+  await fs.mkdir(DATA_DIR, { recursive: true });
 }
 
 function isValidDateString(value: unknown): value is string {
@@ -72,23 +83,47 @@ export function isValidRadarMeta(value: unknown): value is RadarMeta {
   );
 }
 
-function writeJsonAtomically(filePath: string, data: unknown): void {
+async function writeJsonAtomically(filePath: string, data: unknown): Promise<void> {
   const tempFile = `${filePath}.tmp`;
-  fs.writeFileSync(tempFile, JSON.stringify(data, null, 2), "utf-8");
-  fs.renameSync(tempFile, filePath);
+  await fs.writeFile(tempFile, JSON.stringify(data, null, 2), "utf-8");
+  await fs.rename(tempFile, filePath);
 }
 
-/**
- * Lê o arquivo radar.json
- */
-export function readRadar(): RadarData {
-  ensureDataDir();
+async function readJsonFromBlob<T>(pathname: string): Promise<T> {
+  const result = await get(pathname, {
+    access: BLOB_ACCESS,
+  });
 
-  if (!fs.existsSync(RADAR_FILE)) {
-    throw new Error("radar.json not found");
+  if (!result || result.statusCode !== 200 || !result.stream) {
+    throw new Error(`Blob ${pathname} not found`);
   }
 
-  const content = fs.readFileSync(RADAR_FILE, "utf-8");
+  const content = await new Response(result.stream).text();
+  return JSON.parse(content) as T;
+}
+
+async function writeJsonToBlob(pathname: string, data: unknown): Promise<void> {
+  await put(pathname, JSON.stringify(data, null, 2), {
+    access: BLOB_ACCESS,
+    allowOverwrite: true,
+    contentType: "application/json; charset=utf-8",
+  });
+}
+
+export async function readRadar(): Promise<RadarData> {
+  if (useBlobStorage()) {
+    const parsed = await readJsonFromBlob<unknown>(BLOB_RADAR_PATH);
+
+    if (!isValidRadarData(parsed)) {
+      throw new Error("radar blob is invalid");
+    }
+
+    return parsed;
+  }
+
+  await ensureDataDir();
+
+  const content = await fs.readFile(RADAR_FILE, "utf-8");
   const parsed = JSON.parse(content);
 
   if (!isValidRadarData(parsed)) {
@@ -98,69 +133,84 @@ export function readRadar(): RadarData {
   return parsed;
 }
 
-/**
- * Escreve dados no radar.json
- */
-export function writeRadar(data: RadarData): void {
-  ensureDataDir();
-
+export async function writeRadar(data: RadarData): Promise<void> {
   if (!isValidRadarData(data)) {
     throw new Error("Refusing to write invalid radar data");
   }
 
-  writeJsonAtomically(RADAR_FILE, data);
+  if (useBlobStorage()) {
+    await writeJsonToBlob(BLOB_RADAR_PATH, data);
+    return;
+  }
+
+  await ensureDataDir();
+  await writeJsonAtomically(RADAR_FILE, data);
 }
 
-/**
- * Lê o arquivo radar-meta.json
- */
-export function readRadarMeta(): RadarMeta {
-  ensureDataDir();
+export async function readRadarMeta(): Promise<RadarMeta> {
+  const defaultMeta: RadarMeta = {
+    lastUpdateTime: new Date().toISOString(),
+    nextUpdateTime: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    updateInterval: 24,
+    source: useBlobStorage() ? "blob-initial" : "initial",
+    cacheValid: true,
+  };
 
-  if (!fs.existsSync(RADAR_META_FILE)) {
-    // Se não existir, cria um meta padrão
-    const defaultMeta: RadarMeta = {
-      lastUpdateTime: new Date().toISOString(),
-      nextUpdateTime: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-      updateInterval: 24,
-      source: "initial",
-      cacheValid: true,
-    };
-    writeRadarMeta(defaultMeta);
+  if (useBlobStorage()) {
+    try {
+      const parsed = await readJsonFromBlob<unknown>(BLOB_RADAR_META_PATH);
+
+      if (!isValidRadarMeta(parsed)) {
+        throw new Error("radar-meta blob is invalid");
+      }
+
+      return parsed;
+    } catch {
+      await writeRadarMeta(defaultMeta);
+      return defaultMeta;
+    }
+  }
+
+  await ensureDataDir();
+
+  try {
+    const content = await fs.readFile(RADAR_META_FILE, "utf-8");
+    const parsed = JSON.parse(content);
+
+    if (!isValidRadarMeta(parsed)) {
+      throw new Error("radar-meta.json is invalid");
+    }
+
+    return parsed;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw error;
+    }
+
+    await writeRadarMeta(defaultMeta);
     return defaultMeta;
   }
-
-  const content = fs.readFileSync(RADAR_META_FILE, "utf-8");
-  const parsed = JSON.parse(content);
-
-  if (!isValidRadarMeta(parsed)) {
-    throw new Error("radar-meta.json is invalid");
-  }
-
-  return parsed;
 }
 
-/**
- * Escreve dados no radar-meta.json
- */
-export function writeRadarMeta(meta: RadarMeta): void {
-  ensureDataDir();
-
+export async function writeRadarMeta(meta: RadarMeta): Promise<void> {
   if (!isValidRadarMeta(meta)) {
     throw new Error("Refusing to write invalid radar metadata");
   }
 
-  writeJsonAtomically(RADAR_META_FILE, meta);
+  if (useBlobStorage()) {
+    await writeJsonToBlob(BLOB_RADAR_META_PATH, meta);
+    return;
+  }
+
+  await ensureDataDir();
+  await writeJsonAtomically(RADAR_META_FILE, meta);
 }
 
-/**
- * Verifica se o cache é válido (menos de 24 horas)
- */
-export function isCacheValid(): boolean {
+export async function isCacheValid(): Promise<boolean> {
   try {
-    const meta = readRadarMeta();
+    const meta = await readRadarMeta();
     const lastUpdate = new Date(meta.lastUpdateTime).getTime();
-    const now = new Date().getTime();
+    const now = Date.now();
     const hoursSinceUpdate = (now - lastUpdate) / (1000 * 60 * 60);
 
     return hoursSinceUpdate < meta.updateInterval;
@@ -169,16 +219,17 @@ export function isCacheValid(): boolean {
   }
 }
 
-/**
- * Retorna o tempo até a próxima atualização permitida (em ms)
- */
-export function getTimeUntilNextUpdate(): number {
+export async function getTimeUntilNextUpdate(): Promise<number> {
   try {
-    const meta = readRadarMeta();
+    const meta = await readRadarMeta();
     const nextUpdate = new Date(meta.nextUpdateTime).getTime();
-    const now = new Date().getTime();
+    const now = Date.now();
     return Math.max(0, nextUpdate - now);
   } catch {
     return 0;
   }
+}
+
+export function getRadarStorageMode(): "blob" | "local" {
+  return useBlobStorage() ? "blob" : "local";
 }

@@ -2,8 +2,11 @@
  * Cliente MCP local para coleta de fundamentos.
  *
  * Nesta fase o fluxo de update fala apenas com este cliente.
- * O cliente conversa com o servidor MCP local via HTTP/JSON-RPC.
+ * Em desenvolvimento, ele conversa com o servidor MCP local via HTTP/JSON-RPC.
+ * Em produção no Vercel, ele pode executar as tools em-processo.
  */
+
+import { executeMCPTool } from "./mcp-tools";
 
 export interface MCPStockData {
   ticker: string;
@@ -31,12 +34,25 @@ interface MCPJsonRpcResponse<T> {
 
 const MCP_SERVER_URL = process.env.MCP_SERVER_URL || "http://127.0.0.1:3031/mcp";
 const MCP_TIMEOUT_MS = Number(process.env.MCP_TIMEOUT_MS || 8000);
+const MCP_TRANSPORT =
+  process.env.MCP_TRANSPORT ||
+  (process.env.VERCEL ? "internal" : "http");
 
 function logStep(message: string): void {
   console.log(`[MCP Client] ${message}`);
 }
 
+function isInternalTransport(): boolean {
+  return MCP_TRANSPORT === "internal";
+}
+
 async function callMCPTool<T>(tool: string, args: Record<string, unknown>): Promise<T> {
+  if (isInternalTransport()) {
+    logStep(`Executando tool ${tool} em modo interno`);
+    const result = await executeMCPTool(tool, args);
+    return result as T;
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), MCP_TIMEOUT_MS);
 

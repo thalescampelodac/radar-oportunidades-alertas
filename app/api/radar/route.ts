@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { readRadar, readRadarMeta } from "@/lib/radar-storage";
 import { RadarData, RadarMeta } from "@/lib/types";
 
-export const revalidate = 3600; // Revalidate a cada hora
+export const dynamic = "force-dynamic";
 
 function buildFallbackRadar(): { data: RadarData; meta: RadarMeta } {
   const now = new Date();
@@ -27,8 +27,7 @@ function buildFallbackRadar(): { data: RadarData; meta: RadarMeta } {
 
 export async function GET() {
   try {
-    const radar = readRadar();
-    const meta = readRadarMeta();
+    const [radar, meta] = await Promise.all([readRadar(), readRadarMeta()]);
 
     return NextResponse.json({
       data: radar,

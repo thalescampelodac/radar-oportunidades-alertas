@@ -199,9 +199,9 @@ async function fetchFromBrapi(tickers: string[]): Promise<StockFundamentals[]> {
   }
 }
 
-function getFallbackStocks(): StockFundamentals[] {
+async function getFallbackStocks(): Promise<StockFundamentals[]> {
   try {
-    const radar = readRadar();
+    const radar = await readRadar();
     const allStocks = [...(radar.opportunities ?? []), ...(radar.alerts ?? [])];
 
     if (allStocks.length > 0) {
@@ -259,7 +259,7 @@ export async function getBrazilianStocksFundamentals(
 export async function getBrazilianStocksWithFallback(
   tickers?: string[]
 ): Promise<StockFundamentals[]> {
-  const baseStocks = getFallbackStocks();
+  const baseStocks = await getFallbackStocks();
   const liveStocks = await getBrazilianStocksFundamentals(tickers);
 
   if (liveStocks.length === 0) {

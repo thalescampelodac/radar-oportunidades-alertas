@@ -22,7 +22,14 @@
  * - Gemini apenas enriquece texto e nunca bloqueia a atualizacao
  */
 
-import { readRadarMeta, writeRadar, writeRadarMeta, readRadar } from "../lib/radar-storage";
+import {
+  getRadarStorageMode,
+  getTimeUntilNextUpdate,
+  readRadarMeta,
+  writeRadar,
+  writeRadarMeta,
+  readRadar,
+} from "../lib/radar-storage";
 import { analyzeByRules } from "../lib/stock-rules";
 import { RadarData, RadarMeta, Stock } from "../lib/types";
 import { connectMCPClient, fetchMultipleStocksViaMCP } from "../lib/mcp-client";
@@ -99,15 +106,15 @@ function logStep(message: string): void {
 /**
  * Verifica se é permitido atualizar (respeita intervalo de 24h)
  */
-function isUpdateAllowed(): boolean {
+async function isUpdateAllowed(): Promise<boolean> {
   try {
-    const meta = readRadarMeta();
+    const meta = await readRadarMeta();
     const lastUpdate = new Date(meta.lastUpdateTime).getTime();
     const now = new Date().getTime();
     const hoursSinceUpdate = (now - lastUpdate) / (1000 * 60 * 60);
 
     logStep(
-      `Horas desde ultima atualizacao: ${hoursSinceUpdate.toFixed(2)} | fonte atual: ${meta.source}`
+      `Horas desde ultima atualizacao: ${hoursSinceUpdate.toFixed(2)} | fonte atual: ${meta.source} | storage: ${getRadarStorageMode()}`
     );
 
     return hoursSinceUpdate >= meta.updateInterval;
@@ -129,7 +136,7 @@ async function fetchStockData(): Promise<Array<{
   console.log("\n=== Fase 2: Buscando dados reais de ações brasileiras via MCP ===");
 
   try {
-    logStep("Conectando ao MCP local");
+    logStep("Conectando ao MCP");
     await connectMCPClient();
     logStep(`Solicitando fundamentos ao MCP para ${RADAR_TICKERS.join(", ")}`);
     const realStocks = await fetchMultipleStocksViaMCP(RADAR_TICKERS);
@@ -289,12 +296,12 @@ export async function updateRadar(): Promise<{
   data?: RadarData;
 }> {
   console.log("=== Iniciando atualização do radar ===");
-  const cachedRadar = safeReadCurrentRadar();
+  const cachedRadar = await safeReadCurrentRadar();
 
   try {
     // Verifica se é permitido atualizar
-    if (!isUpdateAllowed()) {
-      const timeUntilNextUpdate = getTimeUntilNextUpdate();
+    if (!(await isUpdateAllowed())) {
+      const timeUntilNextUpdate = await getTimeUntilNextUpdate();
       const hoursWait = (timeUntilNextUpdate / (1000 * 60 * 60)).toFixed(1);
       const message = `Cache válido. Próxima atualização em ${hoursWait}h`;
       logStep(message);
@@ -364,7 +371,7 @@ export async function updateRadar(): Promise<{
       lastUpdateTime: now,
       nextUpdateTime: nextUpdateTime.toISOString(),
       updateInterval: 24,
-      source: isGeminiConfigured() ? "mcp+gemini+fallback" : "mcp+fallback",
+      source: finalRadarData.geminiEnriched ? "mcp+gemini+fallback" : "mcp+fallback",
       cacheValid: true,
     };
 
@@ -372,8 +379,8 @@ export async function updateRadar(): Promise<{
     logStep(
       `Persistindo radar com ${finalRadarData.opportunities.length} oportunidades e ${finalRadarData.alerts.length} alertas`
     );
-    writeRadar(finalRadarData);
-    writeRadarMeta(meta);
+    await writeRadar(finalRadarData);
+    await writeRadarMeta(meta);
 
     console.log("=== Atualização concluída com sucesso ===");
     console.log(`✓ ${opportunities.length} oportunidades`);
@@ -393,9 +400,9 @@ export async function updateRadar(): Promise<{
   }
 }
 
-function safeReadCurrentRadar(): RadarData | undefined {
+async function safeReadCurrentRadar(): Promise<RadarData | undefined> {
   try {
-    return readRadar();
+    return await readRadar();
   } catch {
     return undefined;
   }
@@ -423,20 +430,6 @@ function buildSafeFallbackResponse(
     success: false,
     message,
   };
-}
-
-/**
- * Retorna tempo até próxima atualização (em ms)
- */
-function getTimeUntilNextUpdate(): number {
-  try {
-    const meta = readRadarMeta();
-    const nextUpdate = new Date(meta.nextUpdateTime).getTime();
-    const now = new Date().getTime();
-    return Math.max(0, nextUpdate - now);
-  } catch {
-    return 0;
-  }
 }
 
 // Executa se for chamado diretamente

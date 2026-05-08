@@ -1,6 +1,6 @@
 import * as http from "http";
 import { URL } from "url";
-import { getBrazilianStocksFundamentals, getAvailableBrazilianTickers } from "../lib/free-stock-data";
+import { executeMCPTool } from "../lib/mcp-tools";
 
 interface JsonRpcRequest {
   jsonrpc?: string;
@@ -52,37 +52,19 @@ function jsonError(id: string | number | null, code: number, message: string): J
   };
 }
 
-function normalizeTickers(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return getAvailableBrazilianTickers();
-  }
-
-  const parsed = value
-    .filter((item): item is string => typeof item === "string")
-    .map((ticker) => ticker.trim().toUpperCase())
-    .filter(Boolean);
-
-  return parsed.length > 0 ? parsed : getAvailableBrazilianTickers();
-}
-
 async function executeTool(method: string, params: Record<string, unknown> | undefined): Promise<unknown> {
-  switch (method) {
-    case "healthcheck":
-      return {
-        status: "ok",
-        server: "radar-mcp",
-        availableTools: ["healthcheck", "get_stock_fundamentals"],
-      };
+  if (method === "get_stock_fundamentals" && Array.isArray(params?.tickers)) {
+    const tickers = params.tickers
+      .filter((item): item is string => typeof item === "string")
+      .map((ticker) => ticker.trim().toUpperCase())
+      .filter(Boolean);
 
-    case "get_stock_fundamentals": {
-      const tickers = normalizeTickers(params?.tickers);
+    if (tickers.length > 0) {
       logStep(`Executando tool get_stock_fundamentals para ${tickers.join(", ")}`);
-      return getBrazilianStocksFundamentals(tickers);
     }
-
-    default:
-      throw new Error(`Tool nao suportada: ${method}`);
   }
+
+  return executeMCPTool(method, params);
 }
 
 async function readRequestBody(request: http.IncomingMessage): Promise<string> {

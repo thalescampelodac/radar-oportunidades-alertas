@@ -1,169 +1,228 @@
 # Radar de Oportunidades e Alertas
 
-## Status Atual
+## Arquitetura Atual
 
-O projeto agora usa este fluxo:
+O projeto agora opera em dois modos compatíveis:
 
-- frontend continua consumindo apenas `GET /api/radar`
-- MCP local faz toda a coleta de fundamentos
-- `stock-rules.ts` continua sendo a fonte principal de score e categoria
-- Gemini e opcional e serve apenas para enriquecer texto
-- cache de 24 horas continua sendo a trava principal de custo
+- desenvolvimento local:
+  - frontend Next.js
+  - `GET /api/radar` lendo `data/radar.json`
+  - MCP via servidor local em `http://127.0.0.1:3031/mcp`
+  - persistência em JSON local
+- produção no Vercel:
+  - frontend Next.js
+  - `GET /api/radar` lendo storage durável via Vercel Blob
+  - MCP em transporte interno, sem processo separado
+  - atualização diária por Vercel Cron
 
-## Fluxo Completo Atualizado
+O contrato do frontend não muda:
+
+- o frontend continua chamando apenas `GET /api/radar`
+- o frontend nunca fala com brapi nem Gemini
+- score e categoria continuam vindo das regras locais
+
+## Fluxo Completo
 
 1. O frontend chama `GET /api/radar`.
-2. A rota le `data/radar.json` e `data/radar-meta.json`.
-3. `POST /api/cron/update-radar` ou `scripts/update-radar.ts` inicia a atualizacao.
-4. O script verifica se a janela de 24 horas permite nova execucao.
-5. Se permitir, o script chama o cliente MCP em `lib/mcp-client.ts`.
-6. O cliente chama a tool `get_stock_fundamentals`.
-7. O servidor MCP em `mcp-server/server.ts` consulta a `brapi.dev`.
-8. Os fundamentos retornam ao `update-radar.ts`.
-9. `stock-rules.ts` calcula score, categoria, justificativa base e riscos.
-10. Se `GEMINI_API_KEY` estiver configurada, o Gemini recebe os ativos ja classificados em uma unica chamada.
-11. O Gemini pode enriquecer:
-    - justificativas
-    - resumo textual do radar
-    - observacoes educativas
-12. O Gemini nao altera score nem categoria.
-13. O Gemini tenta primeiro JSON mode; se a API rejeitar essa configuracao, tenta um fallback simples automaticamente.
-14. Se o Gemini ainda falhar, o fluxo segue com as justificativas locais.
-15. Se o MCP falhar, o fluxo preserva primeiro o `radar.json` atual.
-16. Se o MCP devolver apenas parte dos ativos, o restante e preenchido com cache local ou mocks.
-17. Se nao houver cache valido, os mocks internos continuam como fallback final.
+2. A rota lê o radar persistido mais recente.
+3. Em desenvolvimento, a leitura vem de `/data/radar.json` e `/data/radar-meta.json`.
+4. Em produção com Blob configurado, a leitura vem de:
+   - `radar/radar.json`
+   - `radar/radar-meta.json`
+5. O cron diário chama `GET /api/cron/update-radar`.
+6. A rota valida `CRON_SECRET`.
+7. O update respeita o cache de 24 horas.
+8. Se a janela permitir, `update-radar.ts` chama `lib/mcp-client.ts`.
+9. O cliente MCP:
+   - usa HTTP local em desenvolvimento
+   - usa execução interna em-processo no Vercel
+10. A tool `get_stock_fundamentals` consulta a `brapi.dev`.
+11. Os dados reais passam por `stock-rules.ts`.
+12. As regras locais definem score, categoria, riscos e justificativas base.
+13. Se `GEMINI_API_KEY` existir, o radar classificado recebe 1 chamada opcional de enriquecimento textual.
+14. O Gemini pode enriquecer:
+   - `summary`
+   - `educationalNote`
+   - justificativas e notas educativas por ativo
+15. Se Gemini falhar, o radar segue com texto local.
+16. Se a brapi ou o MCP falharem, o sistema reaproveita o radar atual e completa com fallback local/mock.
+17. O radar só é persistido se o resultado final for válido e suficiente.
 
-## Ativar ou Desativar Gemini
+## Persistência
 
-### Ativar
+### Desenvolvimento local
 
-Defina `GEMINI_API_KEY` no `.env.local`:
+Arquivos usados:
 
-```env
-GEMINI_API_KEY=sua_chave_aqui
-GEMINI_MODEL=gemini-2.5-flash
-GEMINI_API_VERSION=v1beta
-```
+- `data/radar.json`
+- `data/radar-meta.json`
 
-### Desativar
+### Produção no Vercel
 
-Deixe `GEMINI_API_KEY` vazia ou remova a variavel do `.env.local`.
+Blob pathnames usados:
 
-Com Gemini desativado:
+- `radar/radar.json`
+- `radar/radar-meta.json`
 
-- o radar continua funcionando normalmente
-- score e categoria continuam sendo calculados pelas regras locais
-- nenhuma chamada ao Gemini e feita
+O Blob é usado automaticamente quando `BLOB_READ_WRITE_TOKEN` estiver presente.
 
-## Variaveis de Ambiente
+Se o token não existir:
 
-Crie um `.env.local` a partir de `.env.example`:
+- localmente o projeto continua usando JSON
+- no Vercel o deploy ainda sobe usando os arquivos versionados do repositório
+- mas a atualização diária não terá persistência durável
+
+## Variáveis de Ambiente
+
+Copie:
 
 ```bash
 cp .env.example .env.local
 ```
 
-### `BRAPI_API_KEY` opcional
-
-```env
-BRAPI_API_KEY=
-```
-
-Uso:
-
-- sem chave: usa a lista gratuita reduzida suportada pela brapi
-- sem chave, os demais ativos do radar sao completados com fallback local
-- com chave: permite ampliar a cobertura da coleta real
-
-### `CRON_SECRET`
+### Obrigatórias em produção
 
 ```env
 CRON_SECRET=
+BLOB_READ_WRITE_TOKEN=
 ```
 
-Se definido, protege `POST /api/cron/update-radar` com:
-
-```http
-Authorization: Bearer SEU_CRON_SECRET
-```
-
-### `GEMINI_API_KEY`
+### Opcionais
 
 ```env
+BRAPI_API_KEY=
 GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_API_VERSION=v1beta
+RADAR_STORAGE_MODE=
+RADAR_BLOB_ACCESS=private
+MCP_TRANSPORT=
 ```
 
 Uso:
 
-- opcional
-- somente backend
-- nunca exposta ao frontend
-- no maximo 1 chamada por dia, porque o cache de 24 horas impede reexecucoes frequentes
-- modelo padrao atual: `gemini-2.5-flash`
-- versao padrao atual da API: `v1beta`
+- `CRON_SECRET`
+  - protege `GET /api/cron/update-radar` e `POST /api/cron/update-radar`
+- `BLOB_READ_WRITE_TOKEN`
+  - habilita persistência durável no Vercel Blob
+- `BRAPI_API_KEY`
+  - opcional para ampliar cobertura da brapi
+- `GEMINI_API_KEY`
+  - opcional para enriquecimento textual
+- `RADAR_STORAGE_MODE`
+  - vazio: auto
+  - `local`: força JSON local
+  - `blob`: força Blob
+- `RADAR_BLOB_ACCESS`
+  - padrão `private`
+- `MCP_TRANSPORT`
+  - vazio: auto
+  - `http`: força MCP via servidor local
+  - `internal`: força MCP em-processo
 
-## Como Iniciar o MCP Localmente
+## Como Configurar no Vercel
 
-```bash
-npm run mcp:start
+### 1. Criar um Blob Store
+
+No dashboard do projeto:
+
+1. abra `Storage`
+2. crie um `Blob`
+3. escolha acesso `private`
+4. conecte o store ao projeto
+
+Isso injeta `BLOB_READ_WRITE_TOKEN` no ambiente do projeto.
+
+### 2. Configurar envs do projeto
+
+No Vercel, configure:
+
+```env
+CRON_SECRET=um_token_forte
+BRAPI_API_KEY=
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_API_VERSION=v1beta
+RADAR_BLOB_ACCESS=private
 ```
 
-Esse comando:
+### 3. Deploy
 
-1. compila `mcp-server/server.ts` e dependencias para `.mcp-dist`
-2. sobe o servidor MCP local em `http://127.0.0.1:3031/mcp`
+Depois do deploy, o `vercel.json` ativa 1 cron diário em:
 
-### Testar healthcheck do MCP
+- `GET /api/cron/update-radar`
 
-```bash
-curl http://127.0.0.1:3031/health
-```
+Schedule atual:
 
-### Testar a tool `get_stock_fundamentals`
+- `0 11 * * *`
 
-```bash
-curl -X POST http://127.0.0.1:3031/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":"1","method":"get_stock_fundamentals","params":{"tickers":["PETR4","VALE3"]}}'
-```
+Observação:
 
-## Como Testar o Projeto
+- no Hobby, a execução diária acontece em UTC e pode ocorrer em qualquer minuto da hora agendada
+
+## Como Testar Localmente
+
+### Fluxo local com MCP HTTP
 
 ```bash
 npm install
 npm run mcp:start
 npm run dev
 curl http://localhost:3000/api/radar
-curl -X POST http://localhost:3000/api/cron/update-radar
 curl -X POST http://localhost:3000/api/cron/update-radar -H "Authorization: Bearer $CRON_SECRET"
-npm run build
 ```
 
-## Garantias do Fluxo
+### Simular modo Vercel sem subir o MCP local
 
-- o frontend nunca chama MCP nem Gemini
-- o MCP e a unica camada responsavel pela coleta de fundamentos
-- as regras locais continuam sendo a base da pontuacao
-- o Gemini apenas enriquece texto
-- erro no Gemini nunca bloqueia atualizacao
-- erro no MCP nunca deve quebrar o frontend
-- `radar.json` nao e sobrescrito com lista vazia ou payload invalido
-- a escrita continua atomica
+```bash
+export MCP_TRANSPORT=internal
+npm run dev
+curl -X POST http://localhost:3000/api/cron/update-radar -H "Authorization: Bearer $CRON_SECRET"
+```
 
-## O Que Ainda Esta em Fallback ou Mock
+### Testar a rota de cron no formato do Vercel
 
-- varios ativos ainda podem depender de cache ou mock fora da lista gratuita da brapi
-- os mocks internos permanecem como ultima camada de seguranca
-- o texto enriquecido pelo Gemini e opcional e pode nao existir em todas as atualizacoes
+```bash
+curl http://localhost:3000/api/cron/update-radar \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
 
-## Custo Esperado no Free Tier
+## Fallbacks Mantidos
 
-Esperado: custo zero, desde que o uso continue dentro do free tier.
+- se o MCP falhar, o radar atual é preservado
+- se a brapi responder parcialmente, o restante é completado com cache/mock
+- se Gemini falhar, o texto local continua
+- `radar.json` e `radar-meta.json` não são sobrescritos com payload vazio ou inválido
+- o frontend continua funcional mesmo sem atualização nova
 
-Cenario atual:
+## O Que Ainda Permanece em Fallback ou Mock
 
-- 1 chamada diaria ao MCP para fundamentos
-- 1 chamada diaria ao Gemini no maximo
-- prompt reduzido e uma unica resposta JSON curta
+- parte do universo de tickers continua vindo de fallback quando a brapi gratuita não cobre tudo
+- sem `BRAPI_API_KEY`, a coleta real fica reduzida à lista gratuita suportada
+- os mocks internos continuam como última camada de segurança
 
-Na pratica, esse desenho deve ficar confortavelmente dentro do free tier do `gemini-1.5-flash` para um MVP com atualizacao diaria, mas a disponibilidade exata continua sujeita aos limites vigentes da conta e da API.
+## Comandos para Validar
+
+### Local
+
+```bash
+npm install
+npm run dev
+npm run build
+npm run mcp:start
+```
+
+### Rotas
+
+```bash
+curl http://localhost:3000/api/radar
+curl http://localhost:3000/api/cron/update-radar -H "Authorization: Bearer $CRON_SECRET"
+curl -X POST http://localhost:3000/api/cron/update-radar -H "Authorization: Bearer $CRON_SECRET"
+```
+
+### Produção
+
+```bash
+curl https://SEU-DOMINIO/api/radar
+curl https://SEU-DOMINIO/api/cron/update-radar -H "Authorization: Bearer SEU_CRON_SECRET"
+```
