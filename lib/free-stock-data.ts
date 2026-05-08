@@ -138,19 +138,29 @@ function mapBrapiResult(result: BrapiQuoteResult): StockFundamentals | null {
   };
 }
 
+function getBrapiRequestTickers(requestedTickers: string[], hasToken: boolean): string[] {
+  if (hasToken) {
+    return requestedTickers;
+  }
+
+  const freeTierTickers = requestedTickers.filter((ticker) => BRAZILIAN_TICKERS.includes(ticker));
+  return freeTierTickers.length > 0 ? freeTierTickers : BRAZILIAN_TICKERS;
+}
+
 async function fetchFromBrapi(tickers: string[]): Promise<StockFundamentals[]> {
   if (tickers.length === 0) {
     return [];
   }
 
   const token = process.env.BRAPI_API_KEY;
+  const requestTickers = getBrapiRequestTickers(tickers, Boolean(token));
   const headers: HeadersInit = {};
 
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const url = new URL(`https://brapi.dev/api/quote/${tickers.join(",")}`);
+  const url = new URL(`https://brapi.dev/api/quote/${requestTickers.join(",")}`);
   url.searchParams.set("fundamental", "true");
   url.searchParams.set("dividends", "true");
 
@@ -159,7 +169,7 @@ async function fetchFromBrapi(tickers: string[]): Promise<StockFundamentals[]> {
 
   try {
     console.log(
-      `[StockData] Consultando brapi para ${tickers.join(", ")} | token configurado: ${token ? "sim" : "nao"}`
+      `[StockData] Consultando brapi para ${requestTickers.join(", ")} | token configurado: ${token ? "sim" : "nao"}`
     );
 
     const response = await fetch(url.toString(), {

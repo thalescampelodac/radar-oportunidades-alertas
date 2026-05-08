@@ -90,8 +90,10 @@ export default function Radar() {
 
       {/* Aviso Educacional */}
       <div className={styles.disclaimer}>
-        <strong>⚠️ Aviso Importante:</strong> Este radar é apenas um instrumento
-        educacional baseado em dados públicos e gratuitos. Não é uma recomendação
+        <strong>⚠️ Aviso Importante:</strong> O Radar de Oportunidades e Alertas 
+        é um projeto experimental e educacional criado para acompanhar ações 
+        brasileiras utilizando fundamentos financeiros públicos, automação e
+         inteligência artificial. Não é uma recomendação
         de investimento. Sempre consulte um profissional qualificado antes de
         tomar decisões financeiras.
       </div>

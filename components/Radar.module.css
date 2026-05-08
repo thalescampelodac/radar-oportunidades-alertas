@@ -68,6 +68,18 @@
   line-height: 1.6;
 }
 
+.experimentNote {
+  max-width: 1200px;
+  margin: 0 auto 40px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #92400e;
+  background: #fef3c7;
+  border-left: 4px solid #f59e0b;
+  border-radius: 8px;
+  padding: 16px 20px;
+}
+
 .section {
   max-width: 1200px;
   margin: 0 auto 60px;
@@ -153,6 +165,11 @@
   .grid {
     grid-template-columns: 1fr;
     gap: 16px;
+  }
+
+  .experimentNote {
+    margin-bottom: 28px;
+    padding: 14px 16px;
   }
 
   .section {

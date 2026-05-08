@@ -1,7 +1,7 @@
 {
-  "lastUpdateTime": "2026-05-08T10:00:00Z",
-  "nextUpdateTime": "2026-05-09T10:00:00Z",
+  "lastUpdateTime": "2026-05-08T16:35:29.612Z",
+  "nextUpdateTime": "2026-05-09T16:35:34.879Z",
   "updateInterval": 24,
-  "source": "mock-data",
+  "source": "mcp+gemini+fallback",
   "cacheValid": true
 }

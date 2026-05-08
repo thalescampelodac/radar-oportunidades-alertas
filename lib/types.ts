@@ -4,6 +4,7 @@ export interface Stock {
   score: number; // 0 a 10
   category: "opportunity" | "alert";
   justification: string;
+  educationalNote?: string;
   metrics: {
     dy?: number; // Dividend Yield %
     pb?: number; // Price to Book
@@ -19,6 +20,9 @@ export interface Stock {
 export interface RadarData {
   opportunities: Stock[];
   alerts: Stock[];
+  summary?: string;
+  educationalNote?: string;
+  geminiEnriched?: boolean;
   lastUpdate: string; // ISO date
   updateStatus: "automatic" | "manual";
 }

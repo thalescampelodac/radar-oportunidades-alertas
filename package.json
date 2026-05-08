@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "mcp:build": "tsc --noEmit false --outDir .mcp-dist --module commonjs --moduleResolution node --target es2020 mcp-server/server.ts lib/free-stock-data.ts lib/radar-storage.ts lib/types.ts",
+    "mcp:start": "npm run mcp:build && node .mcp-dist/mcp-server/server.js"
   },
   "dependencies": {
     "@google/genai": "^2.0.0",

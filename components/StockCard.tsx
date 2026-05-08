@@ -29,6 +29,10 @@ export default function StockCard({ stock, rank }: StockCardProps) {
 
       <p className={styles.justification}>{stock.justification}</p>
 
+      {stock.educationalNote && (
+        <p className={styles.educationalNote}>{stock.educationalNote}</p>
+      )}
+
       {riskText && <p className={styles.risk}>⚠️ {riskText}</p>}
 
       <div className={styles.metrics}>

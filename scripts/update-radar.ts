@@ -10,20 +10,23 @@
  * Fluxo:
  * 1. Verifica se 24h passaram desde a última atualização
  * 2. Se sim, busca dados reais via APIs gratuitas com fallback para mock
- * 3. Analisa com regras (Gemini desativado nesta fase)
- * 4. Salva em /data/radar.json
- * 5. Atualiza /data/radar-meta.json
+ * 3. Analisa com regras locais
+ * 4. Enriquecimento textual opcional com Gemini
+ * 5. Salva em /data/radar.json
+ * 6. Atualiza /data/radar-meta.json
  *
  * Fase 2: Integração com dados reais
  * - Fonte real primária: brapi.dev
  * - Sem token, usa a lista gratuita suportada
  * - Se falhar, mantém cache/mock sem sobrescrever com erro
+ * - Gemini apenas enriquece texto e nunca bloqueia a atualizacao
  */
 
 import { readRadarMeta, writeRadar, writeRadarMeta, readRadar } from "../lib/radar-storage";
 import { analyzeByRules } from "../lib/stock-rules";
-import { getBrazilianStocksWithFallback } from "../lib/free-stock-data";
 import { RadarData, RadarMeta, Stock } from "../lib/types";
+import { connectMCPClient, fetchMultipleStocksViaMCP } from "../lib/mcp-client";
+import { enrichRadarWithGemini, isGeminiConfigured } from "../lib/gemini";
 
 // Dados mockados para fallback final
 // São usados apenas se:
@@ -87,6 +90,8 @@ const MOCK_STOCKS: Array<{
   },
 ];
 
+const RADAR_TICKERS = MOCK_STOCKS.map((stock) => stock.ticker);
+
 function logStep(message: string): void {
   console.log(`[RadarUpdate] ${message}`);
 }
@@ -121,40 +126,105 @@ async function fetchStockData(): Promise<Array<{
   name: string;
   metrics: Record<string, number | null>;
 }>> {
-  console.log("\n=== Fase 2: Buscando dados reais de ações brasileiras ===");
+  console.log("\n=== Fase 2: Buscando dados reais de ações brasileiras via MCP ===");
 
   try {
-    logStep("Iniciando coleta de dados reais com fallback seguro");
-    const realStocks = await getBrazilianStocksWithFallback();
+    logStep("Conectando ao MCP local");
+    await connectMCPClient();
+    logStep(`Solicitando fundamentos ao MCP para ${RADAR_TICKERS.join(", ")}`);
+    const realStocks = await fetchMultipleStocksViaMCP(RADAR_TICKERS);
 
     if (realStocks && realStocks.length > 0) {
-      logStep(`${realStocks.length} acoes prontas para analise`);
-
-      // Converte para formato esperado
-      return realStocks.map((stock) => {
-        const metrics: Record<string, number | null> = {};
-        if (stock.dy !== undefined) metrics.dy = stock.dy;
-        if (stock.pb !== undefined) metrics.pb = stock.pb;
-        if (stock.pe !== undefined || stock.pe === null) metrics.pe = stock.pe ?? null;
-        if (stock.roe !== undefined) metrics.roe = stock.roe;
-        if (stock.debt !== undefined) metrics.debt = stock.debt;
-        if (stock.liquidez !== undefined) metrics.liquidez = stock.liquidez;
-
-        return {
-          ticker: stock.ticker,
-          name: stock.name || stock.ticker,
-          metrics,
-        };
-      });
+      logStep(`${realStocks.length} acoes retornadas pelo MCP`);
+      return realStocks.map((stock) => mapStockToAnalysisInput(stock));
     }
 
-    logStep("Nenhum dado utilizavel foi retornado. Usando mocks internos.");
-    return MOCK_STOCKS;
+    logStep("MCP nao retornou dados utilizaveis.");
+    return [];
   } catch (error) {
-    console.error("[RadarUpdate] Erro ao buscar dados reais:", error);
-    logStep("Mantendo fallback mock como ultima camada de seguranca.");
-    return MOCK_STOCKS;
+    console.error("[RadarUpdate] Erro no fluxo MCP:", error);
+    logStep("MCP falhou durante a coleta.");
+    return [];
   }
+}
+
+function mapStockToAnalysisInput(stock: {
+  ticker: string;
+  name?: string;
+  dy?: number;
+  pb?: number;
+  pe?: number | null;
+  roe?: number;
+  debt?: number;
+  liquidez?: number;
+}): {
+  ticker: string;
+  name: string;
+  metrics: Record<string, number | null>;
+} {
+  const metrics: Record<string, number | null> = {};
+  if (stock.dy !== undefined) metrics.dy = stock.dy;
+  if (stock.pb !== undefined) metrics.pb = stock.pb;
+  if (stock.pe !== undefined || stock.pe === null) metrics.pe = stock.pe ?? null;
+  if (stock.roe !== undefined) metrics.roe = stock.roe;
+  if (stock.debt !== undefined) metrics.debt = stock.debt;
+  if (stock.liquidez !== undefined) metrics.liquidez = stock.liquidez;
+
+  return {
+    ticker: stock.ticker,
+    name: stock.name || stock.ticker,
+    metrics,
+  };
+}
+
+function buildFallbackAnalysisStocks(
+  cachedRadar: RadarData | undefined
+): Array<{ ticker: string; name: string; metrics: Record<string, number | null> }> {
+  if (cachedRadar) {
+    const allStocks = [...cachedRadar.opportunities, ...cachedRadar.alerts];
+    if (allStocks.length > 0) {
+      return allStocks.map((stock) => ({
+        ticker: stock.ticker,
+        name: stock.name,
+        metrics: {
+          dy: stock.metrics.dy ?? null,
+          pb: stock.metrics.pb ?? null,
+          pe: stock.metrics.pe ?? null,
+          roe: stock.metrics.roe ?? null,
+          debt: stock.metrics.debt ?? null,
+          liquidez: stock.metrics.liquidez ?? null,
+        },
+      }));
+    }
+  }
+
+  return MOCK_STOCKS;
+}
+
+function mergeWithFallbackStocks(
+  liveStocks: Array<{ ticker: string; name: string; metrics: Record<string, number | null> }>,
+  fallbackStocks: Array<{ ticker: string; name: string; metrics: Record<string, number | null> }>
+): Array<{ ticker: string; name: string; metrics: Record<string, number | null> }> {
+  const merged = new Map<string, { ticker: string; name: string; metrics: Record<string, number | null> }>();
+
+  for (const stock of fallbackStocks) {
+    merged.set(stock.ticker, stock);
+  }
+
+  for (const stock of liveStocks) {
+    const previous = merged.get(stock.ticker);
+    merged.set(stock.ticker, {
+      ...previous,
+      ...stock,
+      name: stock.name || previous?.name || stock.ticker,
+      metrics: {
+        ...(previous?.metrics || {}),
+        ...stock.metrics,
+      },
+    });
+  }
+
+  return Array.from(merged.values());
 }
 
 /**
@@ -237,12 +307,21 @@ export async function updateRadar(): Promise<{
 
     // Busca dados
     logStep("Buscando dados de acoes...");
-    const stocksData = await fetchStockData();
+    let stocksData = await fetchStockData();
+    const fallbackStocks = buildFallbackAnalysisStocks(cachedRadar);
     if (stocksData.length === 0) {
-      return buildSafeFallbackResponse(
-        cachedRadar,
-        "Nenhum dado novo foi obtido. Mantendo radar atual sem sobrescrever arquivos."
-      );
+      if (cachedRadar) {
+        return buildSafeFallbackResponse(
+          cachedRadar,
+          "Nenhum dado novo foi obtido via MCP. Mantendo radar atual sem sobrescrever arquivos."
+        );
+      }
+
+      logStep("Sem cache valido. Aplicando mocks internos como fallback final.");
+      stocksData = MOCK_STOCKS;
+    } else {
+      stocksData = mergeWithFallbackStocks(stocksData, fallbackStocks);
+      logStep(`${stocksData.length} acoes disponiveis apos merge com fallback local.`);
     }
 
     // Analisa
@@ -271,21 +350,29 @@ export async function updateRadar(): Promise<{
       );
     }
 
+    let finalRadarData = radarData;
+    if (isGeminiConfigured()) {
+      logStep("Gemini habilitado. Iniciando enriquecimento textual opcional...");
+      finalRadarData = await enrichRadarWithGemini(radarData);
+    } else {
+      logStep("Gemini desabilitado. Mantendo justificativas locais.");
+    }
+
     // Atualiza meta
     const nextUpdateTime = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const meta: RadarMeta = {
       lastUpdateTime: now,
       nextUpdateTime: nextUpdateTime.toISOString(),
       updateInterval: 24,
-      source: "brapi+fallback",
+      source: isGeminiConfigured() ? "mcp+gemini+fallback" : "mcp+fallback",
       cacheValid: true,
     };
 
     // Salva dados
     logStep(
-      `Persistindo radar com ${radarData.opportunities.length} oportunidades e ${radarData.alerts.length} alertas`
+      `Persistindo radar com ${finalRadarData.opportunities.length} oportunidades e ${finalRadarData.alerts.length} alertas`
     );
-    writeRadar(radarData);
+    writeRadar(finalRadarData);
     writeRadarMeta(meta);
 
     console.log("=== Atualização concluída com sucesso ===");
@@ -295,7 +382,7 @@ export async function updateRadar(): Promise<{
     return {
       success: true,
       message: "Radar atualizado com sucesso",
-      data: radarData,
+      data: finalRadarData,
     };
   } catch (error) {
     console.error("Erro ao atualizar radar:", error);

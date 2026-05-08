@@ -93,6 +93,17 @@
   line-height: 1.5;
 }
 
+.educationalNote {
+  margin: -2px 0 12px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #475569;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+}
+
 .risk {
   font-size: 13px;
   color: #dc2626;
