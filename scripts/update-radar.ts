@@ -109,6 +109,18 @@ function logStep(message: string): void {
 async function isUpdateAllowed(): Promise<boolean> {
   try {
     const meta = await readRadarMeta();
+    const currentRadar = await safeReadCurrentRadar();
+
+    if (!meta.cacheValid) {
+      logStep("Meta marcada como sem cache valido. Atualizacao permitida.");
+      return true;
+    }
+
+    if (!currentRadar) {
+      logStep("Radar persistido ainda nao existe. Atualizacao permitida.");
+      return true;
+    }
+
     const lastUpdate = new Date(meta.lastUpdateTime).getTime();
     const now = new Date().getTime();
     const hoursSinceUpdate = (now - lastUpdate) / (1000 * 60 * 60);

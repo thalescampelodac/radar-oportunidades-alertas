@@ -148,12 +148,13 @@ export async function writeRadar(data: RadarData): Promise<void> {
 }
 
 export async function readRadarMeta(): Promise<RadarMeta> {
+  const now = Date.now();
   const defaultMeta: RadarMeta = {
-    lastUpdateTime: new Date().toISOString(),
-    nextUpdateTime: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    lastUpdateTime: new Date(now - 25 * 60 * 60 * 1000).toISOString(),
+    nextUpdateTime: new Date(now).toISOString(),
     updateInterval: 24,
     source: useBlobStorage() ? "blob-initial" : "initial",
-    cacheValid: true,
+    cacheValid: false,
   };
 
   if (useBlobStorage()) {
