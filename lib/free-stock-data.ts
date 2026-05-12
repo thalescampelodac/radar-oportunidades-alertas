@@ -48,6 +48,12 @@ interface BrapiQuoteResult {
     currentRatio?: number;
     quickRatio?: number;
   };
+  summaryProfile?: {
+    longBusinessSummary?: string;
+    website?: string;
+    sector?: string;
+    industry?: string;
+  };
 }
 
 // Lista inicial reduzida que funciona sem token segundo a documentação da brapi.
@@ -138,6 +144,24 @@ function mapBrapiResult(result: BrapiQuoteResult): StockFundamentals | null {
   };
 }
 
+function hasFundamentalModules(result: BrapiQuoteResult): boolean {
+  return Boolean(
+    result.defaultKeyStatistics?.priceToBook !== undefined ||
+      result.defaultKeyStatistics?.trailingPE !== undefined ||
+      result.defaultKeyStatistics?.forwardPE !== undefined ||
+      result.defaultKeyStatistics?.dividendYield !== undefined ||
+      result.defaultKeyStatistics?.trailingAnnualDividendYield !== undefined ||
+      result.financialData?.returnOnEquity !== undefined ||
+      result.financialData?.debtToEquity !== undefined ||
+      result.financialData?.currentRatio !== undefined ||
+      result.financialData?.quickRatio !== undefined
+  );
+}
+
+function hasUsableFundamentalCoverage(results: BrapiQuoteResult[]): boolean {
+  return results.some(hasFundamentalModules);
+}
+
 function getBrapiRequestTickers(requestedTickers: string[], hasToken: boolean): string[] {
   if (hasToken) {
     return requestedTickers;
@@ -190,6 +214,14 @@ async function fetchFromBrapi(tickers: string[]): Promise<StockFundamentals[]> {
 
     const payload = (await response.json()) as BrapiQuoteResponse;
     const results = payload.results ?? [];
+
+    if (token && !hasUsableFundamentalCoverage(results)) {
+      console.warn(
+        "[StockData] BRAPI autenticada respondeu sem modulos fundamentais liberados. Fazendo fallback para modo sem token."
+      );
+      return fetchFromBrapiWithoutToken(requestedTickers);
+    }
+
     const mapped = results
       .map(mapBrapiResult)
       .filter((stock): stock is StockFundamentals => stock !== null);
@@ -201,6 +233,47 @@ async function fetchFromBrapi(tickers: string[]): Promise<StockFundamentals[]> {
     return [];
   } finally {
     clearTimeout(timeoutId);
+  }
+}
+
+async function fetchFromBrapiWithoutToken(tickers: string[]): Promise<StockFundamentals[]> {
+  const requestTickers = getBrapiRequestTickers(tickers, false);
+  const url = new URL(`https://brapi.dev/api/quote/${requestTickers.join(",")}`);
+  url.searchParams.set("fundamental", "true");
+  url.searchParams.set("dividends", "true");
+
+  try {
+    console.log(
+      `[StockData] Consultando brapi em modo publico para ${requestTickers.join(", ")}`
+    );
+
+    const response = await fetch(url.toString(), {
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      console.error(
+        `[StockData] brapi publica respondeu ${response.status} ${response.statusText}`
+      );
+      if (requestTickers.length > 1) {
+        console.log("[StockData] Tentando fallback publico por ticker individual na brapi");
+        return fetchFromBrapiIndividually(requestTickers, {});
+      }
+
+      return [];
+    }
+
+    const payload = (await response.json()) as BrapiQuoteResponse;
+    const results = payload.results ?? [];
+    const mapped = results
+      .map(mapBrapiResult)
+      .filter((stock): stock is StockFundamentals => stock !== null);
+
+    console.log(`[StockData] brapi publica retornou ${mapped.length} ativos uteis`);
+    return mapped;
+  } catch (error) {
+    console.error("[StockData] Erro na consulta publica da brapi:", error);
+    return [];
   }
 }
 
