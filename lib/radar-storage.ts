@@ -10,7 +10,7 @@ const BLOB_RADAR_PATH = "radar/radar.json";
 const BLOB_RADAR_META_PATH = "radar/radar-meta.json";
 const BLOB_ACCESS = (process.env.RADAR_BLOB_ACCESS || "private") as "private" | "public";
 
-function useBlobStorage(): boolean {
+function shouldUseBlobStorage(): boolean {
   if (process.env.RADAR_STORAGE_MODE === "blob") {
     return true;
   }
@@ -111,7 +111,7 @@ async function writeJsonToBlob(pathname: string, data: unknown): Promise<void> {
 }
 
 export async function readRadar(): Promise<RadarData> {
-  if (useBlobStorage()) {
+  if (shouldUseBlobStorage()) {
     const parsed = await readJsonFromBlob<unknown>(BLOB_RADAR_PATH);
 
     if (!isValidRadarData(parsed)) {
@@ -138,7 +138,7 @@ export async function writeRadar(data: RadarData): Promise<void> {
     throw new Error("Refusing to write invalid radar data");
   }
 
-  if (useBlobStorage()) {
+  if (shouldUseBlobStorage()) {
     await writeJsonToBlob(BLOB_RADAR_PATH, data);
     return;
   }
@@ -153,11 +153,11 @@ export async function readRadarMeta(): Promise<RadarMeta> {
     lastUpdateTime: new Date(now - 25 * 60 * 60 * 1000).toISOString(),
     nextUpdateTime: new Date(now).toISOString(),
     updateInterval: 24,
-    source: useBlobStorage() ? "blob-initial" : "initial",
+    source: shouldUseBlobStorage() ? "blob-initial" : "initial",
     cacheValid: false,
   };
 
-  if (useBlobStorage()) {
+  if (shouldUseBlobStorage()) {
     try {
       const parsed = await readJsonFromBlob<unknown>(BLOB_RADAR_META_PATH);
 
@@ -198,7 +198,7 @@ export async function writeRadarMeta(meta: RadarMeta): Promise<void> {
     throw new Error("Refusing to write invalid radar metadata");
   }
 
-  if (useBlobStorage()) {
+  if (shouldUseBlobStorage()) {
     await writeJsonToBlob(BLOB_RADAR_META_PATH, meta);
     return;
   }
@@ -232,5 +232,5 @@ export async function getTimeUntilNextUpdate(): Promise<number> {
 }
 
 export function getRadarStorageMode(): "blob" | "local" {
-  return useBlobStorage() ? "blob" : "local";
+  return shouldUseBlobStorage() ? "blob" : "local";
 }

@@ -160,10 +160,6 @@ async function fetchFromBrapi(tickers: string[]): Promise<StockFundamentals[]> {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const url = new URL(`https://brapi.dev/api/quote/${requestTickers.join(",")}`);
-  url.searchParams.set("fundamental", "true");
-  url.searchParams.set("dividends", "true");
-
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8000);
 
@@ -171,6 +167,10 @@ async function fetchFromBrapi(tickers: string[]): Promise<StockFundamentals[]> {
     console.log(
       `[StockData] Consultando brapi para ${requestTickers.join(", ")} | token configurado: ${token ? "sim" : "nao"}`
     );
+
+    const url = new URL(`https://brapi.dev/api/quote/${requestTickers.join(",")}`);
+    url.searchParams.set("fundamental", "true");
+    url.searchParams.set("dividends", "true");
 
     const response = await fetch(url.toString(), {
       headers,
@@ -180,6 +180,11 @@ async function fetchFromBrapi(tickers: string[]): Promise<StockFundamentals[]> {
 
     if (!response.ok) {
       console.error(`[StockData] brapi respondeu ${response.status} ${response.statusText}`);
+      if (requestTickers.length > 1) {
+        console.log("[StockData] Tentando fallback por ticker individual na brapi");
+        return fetchFromBrapiIndividually(requestTickers, headers);
+      }
+
       return [];
     }
 
@@ -197,6 +202,44 @@ async function fetchFromBrapi(tickers: string[]): Promise<StockFundamentals[]> {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function fetchFromBrapiIndividually(
+  tickers: string[],
+  headers: HeadersInit
+): Promise<StockFundamentals[]> {
+  const results = await Promise.all(
+    tickers.map(async (ticker) => {
+      const url = new URL(`https://brapi.dev/api/quote/${ticker}`);
+      url.searchParams.set("fundamental", "true");
+      url.searchParams.set("dividends", "true");
+
+      try {
+        const response = await fetch(url.toString(), {
+          headers,
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          console.error(
+            `[StockData] brapi individual para ${ticker} respondeu ${response.status} ${response.statusText}`
+          );
+          return null;
+        }
+
+        const payload = (await response.json()) as BrapiQuoteResponse;
+        const stock = payload.results?.map(mapBrapiResult).find(Boolean) ?? null;
+        return stock;
+      } catch (error) {
+        console.error(`[StockData] Erro individual na brapi para ${ticker}:`, error);
+        return null;
+      }
+    })
+  );
+
+  const mapped = results.filter((stock): stock is StockFundamentals => stock !== null);
+  console.log(`[StockData] brapi individual retornou ${mapped.length} ativos uteis`);
+  return mapped;
 }
 
 async function getFallbackStocks(): Promise<StockFundamentals[]> {
