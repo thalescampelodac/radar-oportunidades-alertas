@@ -219,7 +219,7 @@ async function fetchFromBrapi(tickers: string[]): Promise<StockFundamentals[]> {
       console.warn(
         "[StockData] BRAPI autenticada respondeu sem modulos fundamentais liberados. Fazendo fallback para modo sem token."
       );
-      return fetchFromBrapiWithoutToken(requestedTickers);
+      return fetchFromBrapiWithoutToken(tickers);
     }
 
     const mapped = results
